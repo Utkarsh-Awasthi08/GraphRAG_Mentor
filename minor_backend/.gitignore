@@ -1,0 +1,8 @@
+node_modules/
+.env
+dist/
+coverage/
+*.log
+*.tsbuildinfo
+# Ignore IDE specific files
+.vscode/

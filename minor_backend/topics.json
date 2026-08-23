@@ -1,0 +1,21 @@
+{
+    "arrays": "ARRAY",
+    "array": "ARRAY",
+  
+    "graphs": "GRAPH",
+    "graph": "GRAPH",
+    "dfs": "DEPTH-FIRST SEARCH",
+    "bfs": "BREADTH-FIRST SEARCH",
+  
+    "dp": "DYNAMIC_PROGRAMMING",
+    "dynamic programming": "DYNAMIC_PROGRAMMING",
+  
+    "tree": "TREE",
+    "trees": "TREE",
+  
+    "linked list": "LINKED_LIST",
+    "linked lists": "LINKED_LIST",
+  
+    "hashmap": "HASHMAP",
+    "hash map": "HASHMAP"
+  }
