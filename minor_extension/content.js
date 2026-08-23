@@ -128,7 +128,7 @@ function getError() {
     if (status && status.toLowerCase().includes("wrong answer")) {
         return errorText ? `Wrong answer for this input: ${errorText}` : "Wrong answer for unknown input";
     }
-    
+
     console.log("Error Element:", errorText);
     return errorText;
 }
@@ -185,7 +185,7 @@ async function captureData() {
     };
     console.log("Captured Data:", data);
     submissionTriggered = false;
-    // sendToBackend(data);
+    sendToBackend(data);
 
     // Save locally (temporary)
     chrome.storage.local.set({ lastSubmission: data });
