@@ -10,12 +10,31 @@ export default function AuthPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
+    setSuccessMessage("");
     setLoading(true);
     try {
-      if (isLogin) {
+      if (isForgotPassword) {
+        const res = await fetch("http://localhost:3000/auth/reset-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, newPassword: password })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Reset failed");
+        setSuccessMessage("Password reset successfully. You can now sign in.");
+        setTimeout(() => {
+          setIsForgotPassword(false);
+          setIsLogin(true);
+          setPassword("");
+          setSuccessMessage("");
+        }, 2000);
+      } else if (isLogin) {
         await login(username, password);
       } else {
         await register(username, password);
@@ -42,10 +61,14 @@ export default function AuthPage() {
         
         <div className="relative z-10">
           <h2 className="text-2xl font-semibold text-white mb-2">
-            {isLogin ? "Welcome back" : "Create an account"}
+            {isForgotPassword ? "Reset Password" : isLogin ? "Welcome back" : "Create an account"}
           </h2>
           <p className="text-slate-400 text-sm mb-8">
-            {isLogin ? "Enter your credentials to access your dashboard" : "Sign up to track your coding journey securely"}
+            {isForgotPassword 
+              ? "Enter your username and new password to reset it"
+              : isLogin 
+                ? "Enter your credentials to access your dashboard" 
+                : "Sign up to track your coding journey securely"}
           </p>
 
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -65,7 +88,9 @@ export default function AuthPage() {
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-2">Password</label>
+              <label className="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-2">
+                {isForgotPassword ? "New Password" : "Password"}
+              </label>
               <div className="relative">
                 <Lock className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
                 <input
@@ -84,6 +109,11 @@ export default function AuthPage() {
                 {error}
               </div>
             )}
+            {successMessage && (
+              <div className="p-3 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-sm">
+                {successMessage}
+              </div>
+            )}
 
             <button
               type="submit"
@@ -92,6 +122,8 @@ export default function AuthPage() {
             >
               {loading ? (
                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : isForgotPassword ? (
+                "Reset Password"
               ) : isLogin ? (
                 "Sign In"
               ) : (
@@ -100,13 +132,41 @@ export default function AuthPage() {
             </button>
           </form>
 
-          <div className="mt-6 text-center">
-            <button
-              onClick={() => setIsLogin(!isLogin)}
-              className="text-sm text-slate-400 hover:text-indigo-400 transition-colors"
-            >
-              {isLogin ? "Don't have an account? Sign up" : "Already have an account? Sign in"}
-            </button>
+          <div className="mt-6 flex flex-col items-center gap-3">
+            {!isForgotPassword && isLogin && (
+              <button
+                onClick={() => {
+                  setIsForgotPassword(true);
+                  setError("");
+                }}
+                className="text-sm text-slate-400 hover:text-indigo-400 transition-colors"
+              >
+                Forgot Password?
+              </button>
+            )}
+            
+            {isForgotPassword ? (
+              <button
+                onClick={() => {
+                  setIsForgotPassword(false);
+                  setIsLogin(true);
+                  setError("");
+                }}
+                className="text-sm text-slate-400 hover:text-indigo-400 transition-colors"
+              >
+                Back to Sign In
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  setIsLogin(!isLogin);
+                  setError("");
+                }}
+                className="text-sm text-slate-400 hover:text-indigo-400 transition-colors"
+              >
+                {isLogin ? "Don't have an account? Sign up" : "Already have an account? Sign in"}
+              </button>
+            )}
           </div>
         </div>
       </div>

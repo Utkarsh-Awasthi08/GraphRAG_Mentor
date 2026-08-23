@@ -44,18 +44,7 @@ function getCode() {
 //     }
 // }
 
-function getUserId() {
-    let userId = localStorage.getItem("leetcode_user");
-
-    if (!userId) {
-        userId = prompt("Enter your LeetCode username:");
-        if (userId) {
-            localStorage.setItem("leetcode_user", userId);
-        }
-    }
-
-    return userId;
-}
+// getUserId removed - using JWT auth from extension storage instead
 
 let problemName = "";
 
@@ -136,17 +125,18 @@ function getError() {
 function getResultStatus() {
     const container = getResultContainer();
     if (!container) return null;
-    const wrong_ans = document.querySelector("h3.flex.items-center.text-xl");
-    if (wrong_ans)
-        return wrong_ans ? wrong_ans.innerText.trim() : null;
     const errorEl = container.querySelector('span[class*="text-red"]');
     const success = container.querySelector('[data-e2e-locator="submission-result"]');
+    const wrong_ans = document.querySelector("h3.flex.items-center.text-xl");
 
     if (errorEl)
-        return errorEl ? errorEl.innerText.trim() : null;
-
+        return errorEl.innerText.trim();
     else if (success)
-        return success ? success.innerText.trim() : null;
+        return success.innerText.trim();
+    else if (wrong_ans)
+        return wrong_ans.innerText.trim();
+    
+    return null;
 }
 function sendToBackend(data) {
     chrome.runtime.sendMessage(
@@ -160,7 +150,6 @@ function sendToBackend(data) {
     );
 }
 async function captureData() {
-    const userId = getUserId();
     const code = await getCode();
     const error = getError();
     const status = getResultStatus();
@@ -173,7 +162,6 @@ async function captureData() {
     if (!code) return;
 
     const data = {
-        userId: userId,
         problem: problemName,
         url,
         code,

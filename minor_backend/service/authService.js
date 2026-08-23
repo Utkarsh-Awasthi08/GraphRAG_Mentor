@@ -54,3 +54,32 @@ export async function verifyUser(username, password) {
     await session.close();
   }
 }
+
+export async function resetPassword(username, newPassword) {
+  const session = driver.session();
+  try {
+    // Check if user exists
+    const checkQuery = `MATCH (u:User {id: $username}) RETURN u`;
+    const checkResult = await session.run(checkQuery, { username });
+    
+    if (checkResult.records.length === 0) {
+      throw new Error("User not found");
+    }
+
+    // Hash the new password securely
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(newPassword, salt);
+
+    // Update User in Neo4j
+    const updateQuery = `
+      MATCH (u:User {id: $username})
+      SET u.passwordHash = $passwordHash
+      RETURN u
+    `;
+    await session.run(updateQuery, { username, passwordHash });
+    
+    return { success: true };
+  } finally {
+    await session.close();
+  }
+}
