@@ -9,7 +9,7 @@ const redis = new Redis({
   maxRetriesPerRequest: 3,
   retryStrategy(times) {
     if (times > 3) return null; // Stop retrying after 3 attempts
-    return Math.min(times * 200, 2000);
+    return Math.min(times * 100, 3000);
   }
 });
 

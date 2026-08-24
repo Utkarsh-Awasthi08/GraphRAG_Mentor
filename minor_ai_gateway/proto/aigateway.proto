@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package aigateway;
+
+service AIGateway {
+  // Unary call (e.g., query classification, Cypher query generation, exact matching)
+  rpc GenerateText (TextRequest) returns (TextResponse);
+
+  // Server-streaming call (e.g., streaming mentor explanations to UI)
+  rpc StreamText (TextRequest) returns (stream TokenChunk);
+}
+
+message TextRequest {
+  string prompt = 1;
+  string prefer_provider = 2; // "gemini", "groq", "openrouter"
+  
+  // Options mapping to the semantic cache and other options
+  bool use_cache = 3;         
+  bool use_semantic_cache = 4;
+  string user_query = 5;      
+  int32 cache_ttl = 6;
+}
+
+message TextResponse {
+  string text = 1;
+  string provider_used = 2;
+  bool from_cache = 3;
+}
+
+message TokenChunk {
+  string text = 1;
+  string provider_used = 2; // Usually only populated on the first chunk or if necessary
+}

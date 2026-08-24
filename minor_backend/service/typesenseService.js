@@ -1,9 +1,11 @@
 import Typesense from 'typesense';
 
+const TYPESENSE_HOST = process.env.TYPESENSE_HOST || 'localhost';
+
 const client = new Typesense.Client({
   nodes: [{
-    host: 'localhost',
-    port: '8109',
+    host: TYPESENSE_HOST,
+    port: '8108',
     protocol: 'http'
   }],
   apiKey: 'minor_project_key',

@@ -1,0 +1,87 @@
+version: "3.8"
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: minor_redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - minor_net
+
+  neo4j:
+    image: neo4j:latest
+    container_name: minor_neo4j
+    environment:
+      - NEO4J_AUTH=neo4j/password
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    networks:
+      - minor_net
+
+  typesense:
+    image: typesense/typesense:27.1
+    container_name: minor_typesense
+    environment:
+      - TYPESENSE_API_KEY=minor_project_key
+      - TYPESENSE_DATA_DIR=/data
+    ports:
+      - "8109:8108"
+    volumes:
+      - typesense_data:/data
+    command: '--data-dir /data --api-key=minor_project_key'
+    networks:
+      - minor_net
+
+  ai_gateway:
+    build:
+      context: ./minor_ai_gateway
+    container_name: minor_ai_gateway
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - OPEN_ROUTER_API_KEY=${OPEN_ROUTER_API_KEY}
+      - REDIS_HOST=redis
+    ports:
+      - "50051:50051"
+    depends_on:
+      - redis
+    networks:
+      - minor_net
+
+  backend:
+    build:
+      context: ./minor_backend
+    container_name: minor_backend
+    environment:
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USERNAME=neo4j
+      - NEO4J_PASSWORD=password
+      - REDIS_HOST=redis
+      - TYPESENSE_HOST=typesense
+      - AI_GATEWAY_URL=ai_gateway:50051
+    ports:
+      - "3000:3000"
+    depends_on:
+      - neo4j
+      - redis
+      - typesense
+      - ai_gateway
+    networks:
+      - minor_net
+
+networks:
+  minor_net:
+    driver: bridge
+
+volumes:
+  redis_data:
+  neo4j_data:
+  neo4j_logs:
+  typesense_data:
