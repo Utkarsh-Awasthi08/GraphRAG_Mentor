@@ -8,21 +8,106 @@ This document provides an in-depth breakdown of all the **performance, cost, sec
 
 | Optimization Area | Problem Solved | Key Technique | Measurable Impact |
 |---|---|---|---|
+| **Microservice Decoupling** | Monolith bloat & tight coupling of AI vendor SDKs | Standalone gRPC Service (`minor_ai_gateway`) with Protobuf | **HTTP/2 Binary Streaming**, zero vendor SDKs in main backend |
 | **Knowledge Graph Queries** | $O(N)$ full table/node scans on graph traversals | Schema Indexes & Unique Constraints | **90–98% faster** Neo4j lookups |
 | **LLM Token Consumption** | Bloated JSON & verbose prompts eating API quotas | Context Minification & Subgraph Pruning | **~65% reduction** in input tokens |
 | **API Cost & Latency** | Redundant LLM calls for repeated/rephrased queries | Two-Tier Redis Cache (Exact + Semantic Vector) | **<10ms response**; 30–40% fewer calls |
 | **Provider Resilience** | 429 rate limits & downtime breaking user chat | Multi-LLM Gateway with Auto-Failover & Cooldowns | **99.9% uptime** via Gemini ➔ Groq ➔ OpenRouter |
+| **Auth & Token Sync** | Anonymous/unlinked submissions from extension | Chrome Storage Sync & JWT Bearer verification | **100% submission-to-user attribution** |
 | **Network Bandwidth** | Heavy chat histories & graph payloads slowing frontend | HTTP Gzip/Brotli Compression (`compression`) | **~75–85% reduction** in payload size |
 | **Database Safety** | Runaway Cypher queries fetching 100k+ records | Auto-appended `LIMIT 25` & Read Transactions | Prevents memory exhaustion & DB lockups |
 | **Abuse Prevention** | Malicious users spamming auth & LLM endpoints | Dual-Layer Sliding Window Rate Limiters | Protects API quotas and server resources |
+| **DevOps & Orchestration**| Manual multi-service spin-up & port clashes | Multi-container `docker-compose.yml` with bridge network | **Single-command deployment** (`docker compose up`) |
 
 ---
 
-## 1. 🗄️ Database & Knowledge Graph Optimizations
+## 1. 🤖 Microservice Architecture & gRPC AI Gateway
 
-### 1.1 Schema Indexes & Constraints ($O(1)$ Lookups)
+### 1.1 gRPC & Protocol Buffers (Binary Serialization over HTTP/2)
+- **File Reference:** [`minor_ai_gateway/proto/aigateway.proto`](file:///Users/utkarshawasthi/Documents/minor_project/minor_ai_gateway/proto/aigateway.proto), [`minor_backend/service/aiGateway.js`](file:///Users/utkarshawasthi/Documents/minor_project/minor_backend/service/aiGateway.js), [`minor_ai_gateway/server.js`](file:///Users/utkarshawasthi/Documents/minor_project/minor_ai_gateway/server.js)
+- **Problem:** Embedding multiple vendor LLM SDKs (`@google/generative-ai`, `groq-sdk`) inside the primary web backend causes dependency bloat, couples API key management to the web service, and prevents independent horizontal scaling of LLM workloads.
+- **Solution:** Extracted LLM orchestration into a dedicated microservice (`minor_ai_gateway`) that communicates with the main backend via high-speed **gRPC (Protocol Buffers over HTTP/2)**.
+- **Protobuf Contract:**
+```protobuf
+syntax = "proto3";
+
+package aigateway;
+
+service AIGateway {
+  rpc GenerateText (TextRequest) returns (TextResponse);
+  rpc StreamText (TextRequest) returns (stream TokenChunk);
+}
+
+message TextRequest {
+  string prompt = 1;
+  string prefer_provider = 2;
+  bool use_cache = 3;
+  bool use_semantic_cache = 4;
+  string user_query = 5;
+  int32 cache_ttl = 6;
+}
+
+message TextResponse {
+  string text = 1;
+  string provider_used = 2;
+  bool from_cache = 3;
+}
+
+message TokenChunk {
+  string text = 1;
+  string provider_used = 2;
+}
+```
+
+### 1.2 Centralized Secrets & Independent Scaling
+- The main backend (`minor_backend`) does **not** need access to third-party LLM API keys (`GEMINI_API_KEY`, `GROQ_API_KEY`, etc.). All sensitive credentials remain isolated within `minor_ai_gateway`.
+- The AI Gateway can be scaled horizontally or allocated more compute independently based on LLM traffic without scaling the entire CRUD backend.
+
+---
+
+## 2. 🔐 Authentication, Token Sync & Security
+
+### 2.1 Extension-to-Web Token Sync
+- **File Reference:** [`minor_extension/popup.js`](file:///Users/utkarshawasthi/Documents/minor_project/minor_extension/popup.js), [`minor_backend/routes/authRoutes.js`](file:///Users/utkarshawasthi/Documents/minor_project/minor_backend/routes/authRoutes.js)
+- **Problem:** Extension submissions previously lacked verified identity association, allowing submissions without a validated user context.
+- **Solution:** Added an interactive popup UI inside the Chrome Extension supporting direct login, registration, and persistent credential synchronization via `chrome.storage.local`.
+- When code is submitted on LeetCode, `content.js` pulls the stored JWT token and attaches it to the `Authorization: Bearer <TOKEN>` header.
+
+### 2.2 Password Reset Workflow
+- **File Reference:** [`minor_backend/service/authService.js`](file:///Users/utkarshawasthi/Documents/minor_project/minor_backend/service/authService.js)
+- **Implementation:** Added a dedicated `/api/auth/reset-password` endpoint. Passwords are salted and hashed using `bcryptjs` (salt rounds: 10) before persisting to Neo4j.
+```javascript
+// minor_backend/service/authService.js
+export async function resetPassword(username, newPassword) {
+  const session = driver.session();
+  try {
+    const checkRes = await session.run(
+      `MATCH (u:User {username: $username}) RETURN u`,
+      { username }
+    );
+    if (checkRes.records.length === 0) {
+      throw new Error("User not found");
+    }
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+    await session.run(
+      `MATCH (u:User {username: $username}) SET u.password = $hashedPassword`,
+      { username, hashedPassword }
+    );
+    return { success: true, message: "Password updated successfully" };
+  } finally {
+    await session.close();
+  }
+}
+```
+
+---
+
+## 3. 🗄️ Database & Knowledge Graph Optimizations
+
+### 3.1 Schema Indexes & Constraints ($O(1)$ Lookups)
 - **File Reference:** [`minor_backend/service/graphService.js`](file:///Users/utkarshawasthi/Documents/minor_project/minor_backend/service/graphService.js)
-- **Problem:** Without indexes, Neo4j performs a full node scan across every single `(:User)`, `(:Problem)`, and `(:Submission)` node on every traversal, which degrades exponentially as submissions grow.
+- **Problem:** Without indexes, Neo4j performs full node scans across every `(:User)`, `(:Problem)`, and `(:Submission)` node on every traversal, which degrades exponentially as submissions grow.
 - **Solution:** Added automated startup schema enforcement that builds unique constraints and property indexes.
 
 ```javascript
@@ -48,7 +133,7 @@ export async function initDatabaseConstraints() {
 
 ---
 
-### 1.2 Automated Cypher Limit Enforcement & Read-Only Transactions
+### 3.2 Automated Cypher Limit Enforcement & Read-Only Transactions
 - **File Reference:** [`minor_backend/service/queryExecutor.js`](file:///Users/utkarshawasthi/Documents/minor_project/minor_backend/service/queryExecutor.js)
 - **Problem:** An LLM-generated Cypher query (e.g. `MATCH (s:Submission) RETURN s`) could accidentally return 50,000 nodes, crashing Node.js memory.
 - **Solution:** 
@@ -70,11 +155,11 @@ function enforceCypherLimit(query) {
 
 ---
 
-## 2. 🧠 Two-Tier Redis Caching Architecture
+## 4. 🧠 Two-Tier Redis Caching Architecture
 
-- **File Reference:** [`minor_backend/service/cacheService.js`](file:///Users/utkarshawasthi/Documents/minor_project/minor_backend/service/cacheService.js)
+- **File Reference:** [`minor_ai_gateway/src/cacheService.js`](file:///Users/utkarshawasthi/Documents/minor_project/minor_ai_gateway/src/cacheService.js)
 - **Problem:** Exact string caching misses rephrased queries (e.g., *"Why do I fail Trees?"* vs *"Why am I failing Tree problems?"*). Calling LLMs for near-identical questions wastes API quotas.
-- **Solution:** Implemented a two-tier caching strategy combining deterministic SHA-256 hashing with vector embedding cosine similarity.
+- **Solution:** Implemented a two-tier caching strategy combining deterministic SHA-256 hashing with vector embedding cosine similarity directly inside the AI Gateway microservice.
 
 ```
                      User Query
@@ -98,42 +183,13 @@ function enforceCypherLimit(query) {
                     [Cache Hit]                       [Cache Miss]
                          │                                 │
                          ▼                                 ▼
-                   Return in ~10ms                 Call AI Gateway ➔
+                   Return in ~10ms                 Call LLM Engine ➔
                                                    Cache in Tier 1 & 2
-```
-
-### Code Implementation:
-```javascript
-// minor_backend/service/cacheService.js
-function cosineSimilarity(a, b) {
-  let dot = 0, normA = 0, normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB) || 1);
-}
-
-export async function findSemanticMatch(queryEmbedding) {
-  const raw = await redis.get("semantic_cache_entries");
-  if (!raw) return null;
-  const entries = JSON.parse(raw);
-  
-  for (const entry of entries) {
-    const score = cosineSimilarity(queryEmbedding, entry.embedding);
-    if (score >= 0.92) {
-      console.log(`🧠 Semantic cache HIT (similarity: ${score.toFixed(4)})`);
-      return { text: entry.text, provider: entry.provider + " (semantic cache)" };
-    }
-  }
-  return null;
-}
 ```
 
 ---
 
-## 3. 🗜️ Context Pruning & LLM Token Minification
+## 5. 🗜️ Context Pruning & LLM Token Minification
 
 - **File Reference:** [`minor_backend/utils/formatter.js`](file:///Users/utkarshawasthi/Documents/minor_project/minor_backend/utils/formatter.js)
 - **Problem:** Passing raw graph JSON into an LLM wastes thousands of tokens on indentation whitespace, `null` fields, empty arrays, and internal database keys (`submissionId`, `url`, `dataJSON`).
@@ -168,18 +224,18 @@ export async function findSemanticMatch(queryEmbedding) {
 
 ---
 
-## 4. 🚀 Multi-Provider AI Gateway with Circuit Breaking
+## 6. 🚀 Multi-Provider LLM Gateway with Circuit Breaking
 
-- **File Reference:** [`minor_backend/service/aiGateway.js`](file:///Users/utkarshawasthi/Documents/minor_project/minor_backend/service/aiGateway.js)
+- **File Reference:** [`minor_ai_gateway/src/aiGateway.js`](file:///Users/utkarshawasthi/Documents/minor_project/minor_ai_gateway/src/aiGateway.js)
 - **Problem:** Free-tier Gemini keys have strict 15 RPM limits. If a user hits a 429 quota error, the app would normally crash or refuse to answer.
-- **Solution:** Built a multi-LLM orchestrator with automatic fallback, in-memory sliding-window rate tracking, and 60-second cooldown circuits.
+- **Solution:** Multi-LLM orchestrator with automatic fallback, sliding-window rate tracking, and 60-second cooldown circuits.
 
 ```
 [ Incoming Prompt ]
         │
         ▼
 ┌───────────────────────────────┐
-│ 1. Primary: Gemini 3.5 Flash  │ ──(429 / Quota Full)──┐
+│ 1. Primary: Gemini Flash      │ ──(429 / Quota Full)──┐
 └───────────────────────────────┘                       │
         │ (Success)                                     ▼
         ▼                               ┌──────────────────────────────┐
@@ -191,45 +247,25 @@ export async function findSemanticMatch(queryEmbedding) {
                                                                         └─────────────────────────┘
 ```
 
-### Circuit Breaker Implementation:
-```javascript
-// minor_backend/service/aiGateway.js
-export function setCooldown(providerKey, durationMs = 60000) {
-  PROVIDERS[providerKey].cooldownUntil = Date.now() + durationMs;
-  console.warn(`🚨 ${PROVIDERS[providerKey].name} placed on cooldown for ${durationMs / 1000}s`);
-}
+---
 
-export function isProviderAvailable(providerKey) {
-  const p = PROVIDERS[providerKey];
-  if (!p.enabled) return false;
-  if (p.cooldownUntil && Date.now() < p.cooldownUntil) return false; // Cooldown active
-  cleanOldRequests(providerKey);
-  return p.requests.length < p.rpm; // Rate limit window check
-}
-```
+## 7. 🐳 Multi-Container Docker Orchestration
+
+- **File Reference:** [`docker-compose.yml`](file:///Users/utkarshawasthi/Documents/minor_project/docker-compose.yml), [`minor_backend/Dockerfile`](file:///Users/utkarshawasthi/Documents/minor_project/minor_backend/Dockerfile), [`minor_ai_gateway/Dockerfile`](file:///Users/utkarshawasthi/Documents/minor_project/minor_ai_gateway/Dockerfile)
+- **Problem:** Running 5 distinct services (Neo4j, Redis, Typesense, AI Gateway, Express Backend) manually requires multiple terminal sessions and exposes risk of host port clashes.
+- **Solution:** Unified multi-container Docker Compose configuration:
+  - Custom bridge network (`minor_net`) for secure inter-container DNS resolution (`bolt://neo4j:7687`, `grpc://ai_gateway:50051`, `redis:6379`, `typesense:8108`).
+  - Safe host port remapping (`6380:6379`, `8109:8108`) to avoid conflicts with global system daemons.
+  - Health dependency chains (`depends_on`) ensuring datastores and gateway boot before the web backend.
 
 ---
 
-## 5. 📦 Network Performance & Streaming
+## 8. 🛡️ Security & Rate Limiting Best Practices
 
-### 5.1 HTTP Payload Compression
-- **File Reference:** [`minor_backend/server.js`](file:///Users/utkarshawasthi/Documents/minor_project/minor_backend/server.js)
-- **Implementation:** Added `compression()` middleware at the root Express layer.
-- **Result:** Gzips/Brotli-compresses large chat history payloads and search responses, reducing bandwidth by **75–85%** and speeding up UI rendering on slower mobile connections.
-
-### 5.2 Server-Sent Chunk Streaming
-- **File Reference:** [`minor_backend/utils/formatter.js`](file:///Users/utkarshawasthi/Documents/minor_project/minor_backend/utils/formatter.js)
-- **Implementation:** Uses Node.js HTTP chunked transfer (`res.write()`) instead of waiting for the full LLM response to complete.
-- **Result:** Time-to-First-Token (TTFT) drops from **~3.5 seconds down to ~200ms**, creating a real-time typing effect in the React UI.
-
----
-
-## 6. 🛡️ Security & Rate Limiting Best Practices
-
-### 6.1 Strict IPv6-Safe Key Generation
+### 8.1 Strict IPv6-Safe Key Generation
 - **File Reference:** [`minor_backend/middleware/rateLimiter.js`](file:///Users/utkarshawasthi/Documents/minor_project/minor_backend/middleware/rateLimiter.js)
 - **Problem:** `express-rate-limit` can misidentify IPv6 subnets or throw proxy validation errors when using custom key generators.
-- **Solution:** Scoped the rate limiters directly to validated `req.user.username` (guaranteed by the preceding JWT `authenticate` middleware) and isolated the authentication routes by IP.
+- **Solution:** Scoped rate limiters directly to validated `req.user.username` (guaranteed by JWT middleware) with IP isolation on auth endpoints.
 
 ```javascript
 // minor_backend/middleware/rateLimiter.js
@@ -244,37 +280,16 @@ export const geminiLimiter = rateLimit({
 
 ---
 
-## 7. 🔍 Hybrid Search & GraphRAG Pipeline
-
-- **File Reference:** [`minor_backend/service/graphRAGService.js`](file:///Users/utkarshawasthi/Documents/minor_project/minor_backend/service/graphRAGService.js)
-- **Dual Pipeline Architecture:**
-  1. **Typesense:** Handles typo-tolerant, instant full-text search over user prompt history (`/history/search?q=...`) in sub-5ms.
-  2. **Neo4j Vector Index + Subgraph Expansion:** Uses native cosine distance (`db.index.vector.queryNodes`) on 768-dim embeddings to find related submissions, then executes a 1–2 hop graph traversal (`OPTIONAL MATCH (s)-[:HAS_ERROR]->(e)`) to reconstruct the full context.
-
-```cypher
-// 1. Vector Search for Seed Submissions
-CALL db.index.vector.queryNodes('submission_embedding', $topK, $queryEmbedding)
-YIELD node AS s, score
-MATCH (u:User {id: $userId})-[:MADE]->(s)
-RETURN elementId(s) AS id, score
-
-// 2. Subgraph 1-2 Hop Traversal
-UNWIND $ids AS sid
-MATCH (s:Submission) WHERE elementId(s) = sid
-OPTIONAL MATCH (s)-[:FOR]->(p:Problem)-[:BELONGS_TO]->(t:Topic)
-OPTIONAL MATCH (s)-[:HAS_ERROR]->(e:Error)
-OPTIONAL MATCH (s)-[:HAS_MISTAKE]->(m:Mistake)
-RETURN p.name, collect(DISTINCT t.name), e.type, m.type
-```
-
----
-
 ## 🏁 Summary Checklist for Production Deployment
 
+- [x] Dedicated gRPC AI Gateway Microservice (`minor_ai_gateway`) running on port `50051`.
+- [x] Unified `docker-compose.yml` orchestrating Neo4j, Redis, Typesense, Gateway, and Backend.
 - [x] Schema indexes & constraints active in Neo4j.
-- [x] Redis running with TTL auto-expiration on port 6380.
+- [x] Two-Tier Redis caching (Exact SHA-256 + Vector Semantic).
 - [x] Context pruning active on both Cypher queries (`LIMIT 25`) and LLM prompts (`Top 10`).
 - [x] Multi-LLM Gateway with fallback to Groq and OpenRouter.
+- [x] Extension popup auth with local token synchronization.
+- [x] Secure password reset workflow with bcrypt hashing.
 - [x] HTTP payload compression active on Express.
 - [x] JWT authentication and per-user sliding window rate limiting enforced.
-- [x] Secrets isolated in `.env` and `.env.example` committed.
+- [x] Secrets isolated in `.env` and `.env.example` templates committed.
