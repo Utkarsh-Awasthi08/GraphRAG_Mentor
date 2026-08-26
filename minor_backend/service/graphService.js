@@ -13,7 +13,8 @@ export async function initDatabaseConstraints() {
       "CREATE CONSTRAINT IF NOT EXISTS FOR (u:User) REQUIRE u.id IS UNIQUE",
       "CREATE INDEX IF NOT EXISTS FOR (s:Submission) ON (s.timestamp)",
       "CREATE INDEX IF NOT EXISTS FOR (p:Problem) ON (p.name)",
-      "CREATE INDEX IF NOT EXISTS FOR (t:Topic) ON (t.name)"
+      "CREATE INDEX IF NOT EXISTS FOR (t:Topic) ON (t.name)",
+      "CREATE VECTOR INDEX submission_embedding IF NOT EXISTS FOR (s:Submission) ON (s.embedding) OPTIONS {indexConfig: {`vector.dimensions`: 768, `vector.similarity_function`: 'cosine'}}"
     ];
     
     for (const q of queries) {
