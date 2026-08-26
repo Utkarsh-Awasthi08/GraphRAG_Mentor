@@ -137,7 +137,24 @@ function App() {
           </div>
 
           <div className="lg:col-span-4 xl:col-span-5">
-            {data ? (
+            {isLoading && !data ? (
+              <div className="animate-in fade-in h-full flex flex-col gap-4">
+                {/* Metric Cards Skeleton */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="h-28 bg-slate-800/50 rounded-xl border border-slate-700/50 animate-pulse"></div>
+                  <div className="h-28 bg-slate-800/50 rounded-xl border border-slate-700/50 animate-pulse"></div>
+                  <div className="h-28 bg-slate-800/50 rounded-xl border border-slate-700/50 animate-pulse"></div>
+                  <div className="h-28 bg-slate-800/50 rounded-xl border border-slate-700/50 animate-pulse"></div>
+                </div>
+                {/* List Skeleton */}
+                <div className="flex-1 bg-slate-800/50 rounded-xl border border-slate-700/50 animate-pulse p-4 flex flex-col gap-3">
+                  <div className="h-6 bg-slate-700/50 rounded w-1/3 mb-2"></div>
+                  <div className="h-16 bg-slate-700/30 rounded-lg"></div>
+                  <div className="h-16 bg-slate-700/30 rounded-lg"></div>
+                  <div className="h-16 bg-slate-700/30 rounded-lg"></div>
+                </div>
+              </div>
+            ) : data ? (
               <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
                 <MetricCards data={data} mode={mode} />
                 <SubmissionsList data={data} />
