@@ -1,4 +1,4 @@
-const API_BASE = "http://localhost:3000";
+export const API_BASE = "http://localhost:3000";
 
 const getAuthHeaders = () => {
   const token = localStorage.getItem("jwt_token");

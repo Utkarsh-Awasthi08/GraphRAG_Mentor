@@ -146,6 +146,15 @@ function sendToBackend(data) {
         },
         (response) => {
             console.log("Response:", response);
+            if (response && !response.success) {
+                if (response.error && response.error.toLowerCase().includes("unauthorized")) {
+                    alert("🤖 GraphRAG Mentor: You are not logged in! Please click the extension icon in your browser toolbar to log in so your submissions can be saved.");
+                } else {
+                    console.error("Failed to save submission:", response.error);
+                }
+            } else if (response && response.success) {
+                console.log("✅ Submission successfully saved to Neo4j Graph!");
+            }
         }
     );
 }
