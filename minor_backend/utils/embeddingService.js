@@ -12,9 +12,9 @@ const mistral = new Mistral({ apiKey: process.env.MISTRAL_API_KEY });
 // ============================================================
 export const INCLUDE_CODE_IN_EMBEDDINGS = false;
 
-// codestral-embed: Mistral's code-optimized embedding model.
-// Outputs 1024-dimensional vectors — ideal for code + error text.
-const EMBEDDING_MODEL = "codestral-embed";
+// mistral-embed: Mistral's official embedding model.
+// Outputs 1024-dimensional vectors.
+const EMBEDDING_MODEL = "mistral-embed";
 export const EMBEDDING_DIMENSIONS = 1024;
 
 /**

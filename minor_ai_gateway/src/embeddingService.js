@@ -6,8 +6,8 @@ const mistral = new Mistral({ apiKey: process.env.MISTRAL_API_KEY });
 
 export const INCLUDE_CODE_IN_EMBEDDINGS = false;
 
-// Must match the backend's embeddingService — both use codestral-embed (1024 dims)
-const EMBEDDING_MODEL = "codestral-embed";
+// Must match the backend's embeddingService — both use mistral-embed (1024 dims)
+const EMBEDDING_MODEL = "mistral-embed";
 export const EMBEDDING_DIMENSIONS = 1024;
 
 /**
