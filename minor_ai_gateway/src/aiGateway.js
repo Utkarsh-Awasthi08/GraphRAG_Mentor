@@ -24,12 +24,10 @@ const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 // Excluded: whisper (audio only), prompt-guard (safety/classification only), compound (orchestration)
 
 const GROQ_MODELS = [
-  { id: "qwen/qwen3.6-27b",      rpm: 30, rpd: 1000, label: "Qwen 3.6 27B"      },
-  { id: "qwen/qwen3.8-27b",      rpm: 30, rpd: 1000, label: "Qwen 3.8 27B"      },
   { id: "openai/gpt-oss-120b",   rpm: 30, rpd: 1000, label: "GPT-OSS 120B"      },
   { id: "openai/gpt-oss-20b",    rpm: 30, rpd: 1000, label: "GPT-OSS 20B"       },
-  { id: "groq/compound-mini",    rpm: 30, rpd: 250,  label: "Groq Compound Mini" },
-  { id: "groq/compound",         rpm: 30, rpd: 250,  label: "Groq Compound"     },
+  { id: "qwen/qwen3.8-27b",      rpm: 30, rpd: 1000, label: "Qwen 3.8 27B"      },
+  { id: "qwen/qwen3.6-27b",      rpm: 30, rpd: 1000, label: "Qwen 3.6 27B"      },
 ];
 
 // Per-model rate-limit state for Groq rotation
@@ -106,7 +104,7 @@ const PROVIDERS = {
   },
   gemini: {
     name:    "Gemini",
-    model:   "gemini-3.6-flash",
+    models:  ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash"],
     enabled: !!process.env.GEMINI_API_KEY,
   },
   mistral: {
@@ -118,6 +116,14 @@ const PROVIDERS = {
     enabled: !!process.env.MISTRAL_API_KEY,
   },
 };
+
+let currentGeminiIndex = 0;
+function pickGeminiModel() {
+  const models = PROVIDERS.gemini.models;
+  const model = models[currentGeminiIndex];
+  currentGeminiIndex = (currentGeminiIndex + 1) % models.length;
+  return model;
+}
 
 // Simple rate-limit state for OpenRouter & Gemini (no rotation)
 const rateLimitState = {
@@ -153,7 +159,8 @@ function setCooldown(providerKey, durationMs = 60_000) {
 // ─────────────── Provider Execution Functions ───────────────
 
 async function callGemini(prompt) {
-  const model  = geminiAI.getGenerativeModel({ model: PROVIDERS.gemini.model });
+  const modelId = pickGeminiModel();
+  const model  = geminiAI.getGenerativeModel({ model: modelId });
   const result = await model.generateContent(prompt);
   return result.response.text().trim();
 }
@@ -191,7 +198,10 @@ async function callGroq(prompt) {
   try {
     recordGroqModelUsage(modelId);
     const completion = await groq.chat.completions.create({
-      messages:   [{ role: "user", content: prompt }],
+      messages:   [
+        { role: "system", content: "IMPORTANT: Do NOT output any reasoning or <think> blocks. Provide the final response directly." },
+        { role: "user", content: prompt }
+      ],
       model:      modelId,
       temperature: 0.3,
       max_tokens:  2048,
@@ -234,7 +244,8 @@ async function callOpenRouter(prompt) {
 // ─────────────── Streaming Functions ───────────────
 
 async function* streamGemini(prompt) {
-  const model  = geminiAI.getGenerativeModel({ model: PROVIDERS.gemini.model });
+  const modelId = pickGeminiModel();
+  const model  = geminiAI.getGenerativeModel({ model: modelId });
   const result = await model.generateContentStream(prompt);
   for await (const chunk of result.stream) {
     yield chunk.text();
@@ -257,10 +268,13 @@ async function streamGroq(prompt) {
   async function* gen() {
     try {
       const completion = await groq.chat.completions.create({
-        messages:    [{ role: "user", content: prompt }],
+        messages:    [
+          { role: "system", content: "IMPORTANT: Do NOT output any reasoning or <think> blocks. Provide the final response directly." },
+          { role: "user", content: prompt }
+        ],
         model:       modelId,
         temperature: 0.3,
-        max_tokens:  2048,
+        max_tokens:  1000,
         stream:      true,
       });
       for await (const chunk of completion) {
