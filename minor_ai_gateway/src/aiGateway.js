@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import Groq from "groq-sdk";
+import { Mistral } from "@mistralai/mistralai";
 import { getCache, setCache, hashKey, findSemanticMatch, addSemanticEntry } from "./cacheService.js";
 import { generateEmbedding } from "./embeddingService.js";
 import dotenv from "dotenv";
@@ -12,6 +13,8 @@ const geminiAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
 });
+
+const mistralClient = new Mistral({ apiKey: process.env.MISTRAL_API_KEY });
 
 const OPENROUTER_API_KEY = process.env.OPEN_ROUTER_API_KEY;
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -88,7 +91,8 @@ function pickGroqModel() {
 }
 
 // ─────────────── Top-Level Provider Configs ───────────────
-// Priority Order: Groq -> OpenRouter -> Gemini
+// Priority Order for Chat/Streaming: Groq -> OpenRouter -> Gemini
+// Dedicated Mistral provider for Cypher generation & query classification
 
 const PROVIDERS = {
   groq: {
@@ -104,6 +108,14 @@ const PROVIDERS = {
     name:    "Gemini",
     model:   "gemini-3.6-flash",
     enabled: !!process.env.GEMINI_API_KEY,
+  },
+  mistral: {
+    name:    "Mistral",
+    // mistral-large for precise analytical tasks (Cypher, classification)
+    modelLarge: "mistral-large-latest",
+    // ministral-8b for fast, low-cost classification
+    modelFast:  "ministral-8b-latest",
+    enabled: !!process.env.MISTRAL_API_KEY,
   },
 };
 
@@ -144,6 +156,25 @@ async function callGemini(prompt) {
   const model  = geminiAI.getGenerativeModel({ model: PROVIDERS.gemini.model });
   const result = await model.generateContent(prompt);
   return result.response.text().trim();
+}
+
+/**
+ * Call Mistral for structured tasks (Cypher generation / query classification).
+ * @param {string} prompt
+ * @param {'large'|'fast'} tier - 'large' for mistral-large, 'fast' for ministral-8b
+ */
+async function callMistral(prompt, tier = "large") {
+  const model = tier === "fast"
+    ? PROVIDERS.mistral.modelFast
+    : PROVIDERS.mistral.modelLarge;
+
+  const result = await mistralClient.chat.complete({
+    model,
+    messages: [{ role: "user", content: prompt }],
+    temperature: 0.1, // Low temperature for deterministic structured outputs
+    maxTokens: 512,
+  });
+  return result.choices[0]?.message?.content?.trim() || "";
 }
 
 /**
@@ -443,6 +474,55 @@ export async function streamText(prompt, options = {}) {
   }
 
   throw new Error(`All AI providers failed to stream. Last error: ${lastError?.message}`);
+}
+
+/**
+ * Dedicated Mistral text generation — for structured tasks that need precision:
+ *   - Text-to-Cypher generation  → tier: "large"  (mistral-large-latest)
+ *   - Query classification       → tier: "fast"   (ministral-8b-latest)
+ *
+ * Bypasses the Groq/OpenRouter/Gemini rotation pool entirely.
+ * Includes Redis exact-cache support.
+ *
+ * @param {string} prompt
+ * @param {object} options
+ * @param {'large'|'fast'} options.tier   - Which Mistral model to use
+ * @param {boolean}        options.cache  - Whether to use Redis cache (default: true)
+ * @param {number}         options.cacheTTL - TTL in seconds (default: 300)
+ * @returns {Promise<{text: string, provider: string, cached: boolean}>}
+ */
+export async function generateMistral(prompt, options = {}) {
+  const { tier = "large", cache = true, cacheTTL = 300 } = options;
+
+  if (!PROVIDERS.mistral.enabled) {
+    throw new Error("Mistral provider is not enabled — missing MISTRAL_API_KEY");
+  }
+
+  // Check Redis cache
+  if (cache) {
+    const cacheKey = hashKey("mistral", prompt);
+    const cached   = await getCache(cacheKey);
+    if (cached) {
+      console.log("⚡ Mistral cache HIT");
+      return { text: cached.text, provider: cached.provider, cached: true };
+    }
+  }
+
+  const model = tier === "fast"
+    ? PROVIDERS.mistral.modelFast
+    : PROVIDERS.mistral.modelLarge;
+
+  console.log(`🧠 Calling Mistral (${model}) [tier: ${tier}]...`);
+  const text = await callMistral(prompt, tier);
+
+  const providerLabel = `Mistral (${model})`;
+
+  if (cache) {
+    const cacheKey = hashKey("mistral", prompt);
+    await setCache(cacheKey, { text, provider: providerLabel }, cacheTTL);
+  }
+
+  return { text, provider: providerLabel, cached: false };
 }
 
 /**

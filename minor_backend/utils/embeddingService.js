@@ -1,8 +1,8 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { Mistral } from "@mistralai/mistralai";
 import dotenv from "dotenv";
 dotenv.config();
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const mistral = new Mistral({ apiKey: process.env.MISTRAL_API_KEY });
 
 // ============================================================
 // 🔧 CONFIGURATION FLAG
@@ -10,10 +10,12 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 // This enriches vector search with code-level patterns but
 // consumes more tokens. Currently DORMANT — flip to true when ready.
 // ============================================================
-const INCLUDE_CODE_IN_EMBEDDINGS = false;
+export const INCLUDE_CODE_IN_EMBEDDINGS = false;
 
-const EMBEDDING_MODEL = "gemini-embedding-001";
-const EMBEDDING_DIMENSIONS = 768;
+// codestral-embed: Mistral's code-optimized embedding model.
+// Outputs 1024-dimensional vectors — ideal for code + error text.
+const EMBEDDING_MODEL = "codestral-embed";
+export const EMBEDDING_DIMENSIONS = 1024;
 
 /**
  * Composes a rich text string from submission data for embedding.
@@ -41,17 +43,16 @@ export function buildSubmissionText(data) {
 }
 
 /**
- * Generate a vector embedding for the given text using Gemini.
- * Returns a Float32Array of length EMBEDDING_DIMENSIONS.
+ * Generate a vector embedding for the given text using Mistral codestral-embed.
+ * Returns an array of length EMBEDDING_DIMENSIONS (1024).
  */
 export async function generateEmbedding(text) {
     try {
-        const model = genAI.getGenerativeModel({ model: EMBEDDING_MODEL });
-        const result = await model.embedContent({
-            content: { role: "user", parts: [{ text }] },
-            outputDimensionality: EMBEDDING_DIMENSIONS,
+        const result = await mistral.embeddings.create({
+            model: EMBEDDING_MODEL,
+            inputs: [text],
         });
-        return result.embedding.values;
+        return result.data[0].embedding;
     } catch (err) {
         console.error("Error generating embedding:", err);
         throw new Error("Failed to generate embedding.");
@@ -65,5 +66,3 @@ export async function embedSubmission(data) {
     const text = buildSubmissionText(data);
     return generateEmbedding(text);
 }
-
-export { INCLUDE_CODE_IN_EMBEDDINGS, EMBEDDING_DIMENSIONS };

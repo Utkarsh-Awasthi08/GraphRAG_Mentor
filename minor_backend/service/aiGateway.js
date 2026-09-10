@@ -89,6 +89,35 @@ export async function streamText(prompt, options = {}) {
 }
 
 /**
+ * Call Mistral via gRPC AI Gateway — for structured tasks (Cypher, classification).
+ * @param {string} prompt
+ * @param {object} options
+ * @param {'large'|'fast'} options.tier - 'large' for mistral-large, 'fast' for ministral-8b
+ * @param {boolean} options.cache
+ * @param {number} options.cacheTTL
+ * @returns {Promise<{text: string, provider: string, cached: boolean}>}
+ */
+export function generateMistral(prompt, options = {}) {
+  return new Promise((resolve, reject) => {
+    const req = {
+      prompt,
+      tier:      options.tier || "large",
+      use_cache: options.cache !== false,
+      cache_ttl: options.cacheTTL || 300,
+    };
+
+    client.GenerateMistral(req, (error, response) => {
+      if (error) return reject(error);
+      resolve({
+        text:     response.text,
+        provider: response.provider_used,
+        cached:   response.from_cache,
+      });
+    });
+  });
+}
+
+/**
  * Stub for gateway status.
  * In a full production setup, this would be an RPC call to the gateway.
  */

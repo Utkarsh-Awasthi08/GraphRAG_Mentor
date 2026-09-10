@@ -1,4 +1,4 @@
-import { generateText } from "../service/aiGateway.js";
+import { generateMistral } from "../service/aiGateway.js";
 
 /**
  * Classify a user query into ANALYTICAL or CONTEXTUAL.
@@ -27,7 +27,11 @@ Reply with ONLY the single word: ANALYTICAL or CONTEXTUAL
 `;
 
     try {
-        const { text, provider } = await generateText(prompt, { cache: true, cacheTTL: 300 });
+        const { text, provider } = await generateMistral(prompt, {
+            tier: "fast",    // ministral-8b: cheap & fast for simple classification
+            cache: true,
+            cacheTTL: 300,
+        });
         console.log(`  ↳ Classification via ${provider}`);
         const classification = text.trim().toUpperCase();
 

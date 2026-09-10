@@ -1,23 +1,17 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { Mistral } from "@mistralai/mistralai";
 import dotenv from "dotenv";
 dotenv.config();
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const mistral = new Mistral({ apiKey: process.env.MISTRAL_API_KEY });
 
-// ============================================================
-// 🔧 CONFIGURATION FLAG
-// Set to true to include code snippets in embedding generation.
-// This enriches vector search with code-level patterns but
-// consumes more tokens. Currently DORMANT — flip to true when ready.
-// ============================================================
-const INCLUDE_CODE_IN_EMBEDDINGS = false;
+export const INCLUDE_CODE_IN_EMBEDDINGS = false;
 
-const EMBEDDING_MODEL = "gemini-embedding-001";
-const EMBEDDING_DIMENSIONS = 768;
+// Must match the backend's embeddingService — both use codestral-embed (1024 dims)
+const EMBEDDING_MODEL = "codestral-embed";
+export const EMBEDDING_DIMENSIONS = 1024;
 
 /**
  * Composes a rich text string from submission data for embedding.
- * When INCLUDE_CODE_IN_EMBEDDINGS is true, the user's code is appended.
  */
 export function buildSubmissionText(data) {
     const parts = [
@@ -28,9 +22,7 @@ export function buildSubmissionText(data) {
         `Topics: ${(data.topics || []).join(", ")}`,
     ];
 
-    // DORMANT: Code embedding support — activate by setting flag to true
     if (INCLUDE_CODE_IN_EMBEDDINGS && data.code) {
-        // Truncate code to ~1500 chars to stay within token limits
         const truncatedCode = data.code.length > 1500
             ? data.code.substring(0, 1500) + "\n// ... truncated"
             : data.code;
@@ -41,19 +33,18 @@ export function buildSubmissionText(data) {
 }
 
 /**
- * Generate a vector embedding for the given text using Gemini.
- * Returns a Float32Array of length EMBEDDING_DIMENSIONS.
+ * Generate a vector embedding using Mistral codestral-embed.
+ * Returns an array of length 1024.
  */
 export async function generateEmbedding(text) {
     try {
-        const model = genAI.getGenerativeModel({ model: EMBEDDING_MODEL });
-        const result = await model.embedContent({
-            content: { role: "user", parts: [{ text }] },
-            outputDimensionality: EMBEDDING_DIMENSIONS,
+        const result = await mistral.embeddings.create({
+            model: EMBEDDING_MODEL,
+            inputs: [text],
         });
-        return result.embedding.values;
+        return result.data[0].embedding;
     } catch (err) {
-        console.error("Error generating embedding:", err);
+        console.error("Error generating embedding (gateway):", err);
         throw new Error("Failed to generate embedding.");
     }
 }
@@ -65,5 +56,3 @@ export async function embedSubmission(data) {
     const text = buildSubmissionText(data);
     return generateEmbedding(text);
 }
-
-export { INCLUDE_CODE_IN_EMBEDDINGS, EMBEDDING_DIMENSIONS };

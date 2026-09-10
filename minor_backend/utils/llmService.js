@@ -1,4 +1,4 @@
-import { generateText } from "../service/aiGateway.js";
+import { generateMistral } from "../service/aiGateway.js";
 import { getCache, setCache, hashKey } from "../service/cacheService.js";
 
 export async function generateCypher(userQuery, userId) {
@@ -44,8 +44,11 @@ User Question: "${userQuery}"
     }
 
     try {
-        const { text, provider } = await generateText(prompt, { cache: false }); // We handle caching ourselves here
-        console.log(`  ↳ Cypher generated via ${provider}`);
+    const { text, provider } = await generateMistral(prompt, {
+        tier: "large",  // mistral-large-latest for precise Cypher
+        cache: false,   // we handle caching ourselves above
+    });
+    console.log(`  ↳ Cypher generated via ${provider}`);
         let cypher = text.trim();
         
         // Strip markdown if the model hallucinates them

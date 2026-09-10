@@ -2,7 +2,7 @@ import grpc from "@grpc/grpc-js";
 import protoLoader from "@grpc/proto-loader";
 import { fileURLToPath } from "url";
 import path from "path";
-import { generateText, streamText } from "./src/aiGateway.js";
+import { generateText, streamText, generateMistral } from "./src/aiGateway.js";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -50,6 +50,32 @@ async function GenerateText(call, callback) {
   }
 }
 
+// Implement GenerateMistral
+async function GenerateMistral(call, callback) {
+  try {
+    const req = call.request;
+    const options = {
+      tier:     req.tier || "large",
+      cache:    req.use_cache !== false,
+      cacheTTL: req.cache_ttl || 300,
+    };
+
+    const result = await generateMistral(req.prompt, options);
+
+    callback(null, {
+      text:          result.text,
+      provider_used: result.provider,
+      from_cache:    result.cached,
+    });
+  } catch (error) {
+    console.error("GenerateMistral Error:", error);
+    callback({
+      code:    grpc.status.INTERNAL,
+      details: error.message,
+    });
+  }
+}
+
 // Implement StreamText
 async function StreamText(call) {
   try {
@@ -84,6 +110,7 @@ function main() {
   
   server.addService(aigatewayProto.AIGateway.service, {
     GenerateText,
+    GenerateMistral,
     StreamText,
   });
 

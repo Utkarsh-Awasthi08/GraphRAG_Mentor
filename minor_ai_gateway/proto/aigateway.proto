@@ -6,6 +6,9 @@ service AIGateway {
   // Unary call (e.g., query classification, Cypher query generation, exact matching)
   rpc GenerateText (TextRequest) returns (TextResponse);
 
+  // Dedicated Mistral call for structured tasks (Text-to-Cypher, classification)
+  rpc GenerateMistral (MistralRequest) returns (TextResponse);
+
   // Server-streaming call (e.g., streaming mentor explanations to UI)
   rpc StreamText (TextRequest) returns (stream TokenChunk);
 }
@@ -25,6 +28,13 @@ message TextResponse {
   string text = 1;
   string provider_used = 2;
   bool from_cache = 3;
+}
+
+message MistralRequest {
+  string prompt = 1;
+  string tier = 2;       // "large" (mistral-large) or "fast" (ministral-8b)
+  bool use_cache = 3;    // default: true
+  int32 cache_ttl = 4;   // default: 300 seconds
 }
 
 message TokenChunk {
