@@ -1,6 +1,8 @@
 import { generateText, streamText } from "../service/aiGateway.js";
 import { INCLUDE_CODE_IN_EMBEDDINGS } from "./embeddingService.js";
 import { saveChatHistory } from "../service/graphService.js";
+import redis from "../service/cacheService.js";
+import crypto from "crypto";
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -146,6 +148,28 @@ export async function streamResponse(question, data, res, mode = "ANALYTICAL", u
         ? buildContextualPrompt(question, prunedData)
         : buildAnalyticalPrompt(question, prunedData);
 
+    // Cache key based on the exact prompt
+    const cacheKey = "stream:" + crypto.createHash("sha256").update(prompt).digest("hex");
+
+    try {
+        const cached = await redis.get(cacheKey);
+        if (cached) {
+            console.log("  ↳ Explanation served from Redis cache");
+            
+            // Artificially stream the cached response to recreate the typewriter effect
+            const chunks = cached.match(/.{1,15}/g) || [cached];
+            for (const chunk of chunks) {
+                res.write(chunk);
+                await new Promise(r => setTimeout(r, 20)); // ~20ms delay per chunk
+            }
+            
+            res.end();
+            return;
+        }
+    } catch (err) {
+        console.warn("Redis cache error:", err.message);
+    }
+
     let fullAnswer = "";
 
     try {
@@ -157,6 +181,12 @@ export async function streamResponse(question, data, res, mode = "ANALYTICAL", u
             res.write(chunkText);
         }
         
+        try {
+            await redis.set(cacheKey, fullAnswer, "EX", 3600); // Cache for 1 hour
+        } catch (err) {
+            console.warn("Redis set error:", err.message);
+        }
+
         if (userId) {
             await saveChatHistory(userId, question, fullAnswer, mode, prunedData);
         }
