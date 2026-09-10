@@ -16,57 +16,124 @@ const groq = new Groq({
 const OPENROUTER_API_KEY = process.env.OPEN_ROUTER_API_KEY;
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-// ─────────────── Provider Configs ───────────────
-// Priority Order: Gemini -> Groq -> OpenRouter (last resort)
+// ─────────────── Groq Model Rotation Pool ───────────────
+// Priority order within Groq: highest RPD & TPD first (best bang for buck)
+// Excluded: whisper (audio only), prompt-guard (safety/classification only), compound (orchestration)
 
-const PROVIDERS = {
-  gemini: {
-    name: "Gemini",
-    model: "gemini-3.5-flash",
-    enabled: !!process.env.GEMINI_API_KEY,
-  },
-  groq: {
-    name: "Groq",
-    model: "qwen/qwen3.6-27b", // fast, free, strong reasoning
-    enabled: !!process.env.GROQ_API_KEY,
-  },
-  openrouter: {
-    name: "OpenRouter",
-    model: "google/gemma-3-27b-it:free", // free tier model
-    enabled: !!OPENROUTER_API_KEY,
-  },
-};
+const GROQ_MODELS = [
+  { id: "qwen/qwen3.6-27b",      rpm: 30, rpd: 1000, label: "Qwen 3.6 27B"      },
+  { id: "qwen/qwen3.8-27b",      rpm: 30, rpd: 1000, label: "Qwen 3.8 27B"      },
+  { id: "openai/gpt-oss-120b",   rpm: 30, rpd: 1000, label: "GPT-OSS 120B"      },
+  { id: "openai/gpt-oss-20b",    rpm: 30, rpd: 1000, label: "GPT-OSS 20B"       },
+  { id: "groq/compound-mini",    rpm: 30, rpd: 250,  label: "Groq Compound Mini" },
+  { id: "groq/compound",         rpm: 30, rpd: 250,  label: "Groq Compound"     },
+];
 
-// ─────────────── Rate Limit Tracking ───────────────
-// Simple in-memory sliding window tracker per provider
+// Per-model rate-limit state for Groq rotation
+const groqModelState = {};
+for (const m of GROQ_MODELS) {
+  groqModelState[m.id] = {
+    count:       0,
+    windowStart: Date.now(),
+    dailyCount:  0,
+    dayStart:    Date.now(),
+    cooldownUntil: 0,
+  };
+}
 
-const rateLimitState = {
-  gemini:     { count: 0, windowStart: Date.now(), maxRPM: 15,  cooldownUntil: 0 },
-  groq:       { count: 0, windowStart: Date.now(), maxRPM: 30,  cooldownUntil: 0 },
-  openrouter: { count: 0, windowStart: Date.now(), maxRPM: 20,  cooldownUntil: 0 },
-};
+function isGroqModelAvailable(modelId) {
+  const m     = GROQ_MODELS.find(x => x.id === modelId);
+  const state = groqModelState[modelId];
+  const now   = Date.now();
 
-function isProviderAvailable(providerKey) {
-  const state = rateLimitState[providerKey];
-  const now = Date.now();
-
-  // Check cooldown (set after a 429 error)
+  // Cooldown (set after a 429 from this specific model)
   if (now < state.cooldownUntil) return false;
 
-  // Reset window every 60 seconds
+  // Reset 60-second RPM window
   if (now - state.windowStart > 60_000) {
-    state.count = 0;
+    state.count       = 0;
     state.windowStart = now;
   }
 
+  // Reset daily RPD window (86 400 s)
+  if (now - state.dayStart > 86_400_000) {
+    state.dailyCount = 0;
+    state.dayStart   = now;
+  }
+
+  // Near-limit threshold: treat 90 % as "full" to rotate early
+  const rpmNearLimit = state.count       >= Math.floor(m.rpm * 0.9);
+  const rpdNearLimit = state.dailyCount  >= Math.floor(m.rpd * 0.9);
+
+  return !rpmNearLimit && !rpdNearLimit;
+}
+
+function recordGroqModelUsage(modelId) {
+  groqModelState[modelId].count++;
+  groqModelState[modelId].dailyCount++;
+}
+
+function setGroqModelCooldown(modelId, durationMs = 60_000) {
+  groqModelState[modelId].cooldownUntil = Date.now() + durationMs;
+  const label = GROQ_MODELS.find(x => x.id === modelId)?.label || modelId;
+  console.warn(`⚠️ Groq [${label}] hit rate limit — cooling down for ${durationMs / 1000}s`);
+}
+
+/** Returns the next available Groq model ID, or null if all are exhausted. */
+function pickGroqModel() {
+  for (const m of GROQ_MODELS) {
+    if (isGroqModelAvailable(m.id)) return m.id;
+  }
+  return null;
+}
+
+// ─────────────── Top-Level Provider Configs ───────────────
+// Priority Order: Groq -> OpenRouter -> Gemini
+
+const PROVIDERS = {
+  groq: {
+    name:    "Groq",
+    enabled: !!process.env.GROQ_API_KEY,
+  },
+  openrouter: {
+    name:    "OpenRouter",
+    model:   "google/gemma-3-27b-it:free",
+    enabled: !!OPENROUTER_API_KEY,
+  },
+  gemini: {
+    name:    "Gemini",
+    model:   "gemini-3.6-flash",
+    enabled: !!process.env.GEMINI_API_KEY,
+  },
+};
+
+// Simple rate-limit state for OpenRouter & Gemini (no rotation)
+const rateLimitState = {
+  openrouter: { count: 0, windowStart: Date.now(), maxRPM: 20, cooldownUntil: 0 },
+  gemini:     { count: 0, windowStart: Date.now(), maxRPM: 15, cooldownUntil: 0 },
+};
+
+function isProviderAvailable(providerKey) {
+  // Groq availability is determined by model rotation, handled separately
+  if (providerKey === "groq") return !!pickGroqModel();
+
+  const state = rateLimitState[providerKey];
+  const now   = Date.now();
+  if (now < state.cooldownUntil) return false;
+  if (now - state.windowStart > 60_000) {
+    state.count       = 0;
+    state.windowStart = now;
+  }
   return state.count < state.maxRPM;
 }
 
 function recordUsage(providerKey) {
+  if (providerKey === "groq") return; // handled per-model
   rateLimitState[providerKey].count++;
 }
 
 function setCooldown(providerKey, durationMs = 60_000) {
+  if (providerKey === "groq") return; // handled per-model
   rateLimitState[providerKey].cooldownUntil = Date.now() + durationMs;
   console.warn(`⚠️ ${PROVIDERS[providerKey].name} hit rate limit — cooling down for ${durationMs / 1000}s`);
 }
@@ -74,35 +141,53 @@ function setCooldown(providerKey, durationMs = 60_000) {
 // ─────────────── Provider Execution Functions ───────────────
 
 async function callGemini(prompt) {
-  const model = geminiAI.getGenerativeModel({ model: PROVIDERS.gemini.model });
+  const model  = geminiAI.getGenerativeModel({ model: PROVIDERS.gemini.model });
   const result = await model.generateContent(prompt);
   return result.response.text().trim();
 }
 
+/**
+ * Call Groq with automatic model rotation.
+ * Returns { text, modelUsed } so callers know which model was picked.
+ */
 async function callGroq(prompt) {
-  const completion = await groq.chat.completions.create({
-    messages: [{ role: "user", content: prompt }],
-    model: PROVIDERS.groq.model,
-    temperature: 0.3,
-    max_tokens: 2048,
-  });
-  return completion.choices[0]?.message?.content?.trim() || "";
+  const modelId = pickGroqModel();
+  if (!modelId) throw new Error("All Groq models are at rate limit");
+
+  const label = GROQ_MODELS.find(m => m.id === modelId)?.label || modelId;
+  console.log(`  ↳ Groq model selected: ${label}`);
+
+  try {
+    recordGroqModelUsage(modelId);
+    const completion = await groq.chat.completions.create({
+      messages:   [{ role: "user", content: prompt }],
+      model:      modelId,
+      temperature: 0.3,
+      max_tokens:  2048,
+    });
+    return { text: completion.choices[0]?.message?.content?.trim() || "", modelUsed: label };
+  } catch (err) {
+    if (err.message?.includes("429") || err.message?.includes("rate") || err.message?.includes("quota")) {
+      setGroqModelCooldown(modelId);
+    }
+    throw err;
+  }
 }
 
 async function callOpenRouter(prompt) {
   const res = await fetch(OPENROUTER_URL, {
-    method: "POST",
+    method:  "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+      Authorization:  `Bearer ${OPENROUTER_API_KEY}`,
       "HTTP-Referer": "http://localhost:3000",
-      "X-Title": "GraphRAG Mentor",
+      "X-Title":      "GraphRAG Mentor",
     },
     body: JSON.stringify({
-      model: PROVIDERS.openrouter.model,
-      messages: [{ role: "user", content: prompt }],
+      model:       PROVIDERS.openrouter.model,
+      messages:    [{ role: "user", content: prompt }],
       temperature: 0.3,
-      max_tokens: 2048,
+      max_tokens:  2048,
     }),
   });
 
@@ -118,42 +203,65 @@ async function callOpenRouter(prompt) {
 // ─────────────── Streaming Functions ───────────────
 
 async function* streamGemini(prompt) {
-  const model = geminiAI.getGenerativeModel({ model: PROVIDERS.gemini.model });
+  const model  = geminiAI.getGenerativeModel({ model: PROVIDERS.gemini.model });
   const result = await model.generateContentStream(prompt);
   for await (const chunk of result.stream) {
     yield chunk.text();
   }
 }
 
-async function* streamGroq(prompt) {
-  const completion = await groq.chat.completions.create({
-    messages: [{ role: "user", content: prompt }],
-    model: PROVIDERS.groq.model,
-    temperature: 0.3,
-    max_tokens: 2048,
-    stream: true,
-  });
-  for await (const chunk of completion) {
-    const text = chunk.choices[0]?.delta?.content || "";
-    if (text) yield text;
+/**
+ * Stream from Groq with automatic model rotation.
+ * Returns { stream (AsyncGenerator), modelLabel }
+ */
+async function streamGroq(prompt) {
+  const modelId = pickGroqModel();
+  if (!modelId) throw new Error("All Groq models are at rate limit");
+
+  const label = GROQ_MODELS.find(m => m.id === modelId)?.label || modelId;
+  console.log(`  ↳ Groq stream model selected: ${label}`);
+
+  recordGroqModelUsage(modelId);
+
+  async function* gen() {
+    try {
+      const completion = await groq.chat.completions.create({
+        messages:    [{ role: "user", content: prompt }],
+        model:       modelId,
+        temperature: 0.3,
+        max_tokens:  2048,
+        stream:      true,
+      });
+      for await (const chunk of completion) {
+        const text = chunk.choices[0]?.delta?.content || "";
+        if (text) yield text;
+      }
+    } catch (err) {
+      if (err.message?.includes("429") || err.message?.includes("rate") || err.message?.includes("quota")) {
+        setGroqModelCooldown(modelId);
+      }
+      throw err;
+    }
   }
+
+  return { stream: gen(), modelLabel: label };
 }
 
 async function* streamOpenRouter(prompt) {
   const res = await fetch(OPENROUTER_URL, {
-    method: "POST",
+    method:  "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+      Authorization:  `Bearer ${OPENROUTER_API_KEY}`,
       "HTTP-Referer": "http://localhost:3000",
-      "X-Title": "GraphRAG Mentor",
+      "X-Title":      "GraphRAG Mentor",
     },
     body: JSON.stringify({
-      model: PROVIDERS.openrouter.model,
-      messages: [{ role: "user", content: prompt }],
+      model:       PROVIDERS.openrouter.model,
+      messages:    [{ role: "user", content: prompt }],
       temperature: 0.3,
-      max_tokens: 2048,
-      stream: true,
+      max_tokens:  2048,
+      stream:      true,
     }),
   });
 
@@ -162,9 +270,9 @@ async function* streamOpenRouter(prompt) {
     throw new Error(`OpenRouter HTTP ${res.status}: ${errorBody}`);
   }
 
-  const reader = res.body.getReader();
+  const reader  = res.body.getReader();
   const decoder = new TextDecoder();
-  let buffer = "";
+  let   buffer  = "";
 
   while (true) {
     const { done, value } = await reader.read();
@@ -186,41 +294,38 @@ async function* streamOpenRouter(prompt) {
 
 // ─────────────── Main Gateway: generateText ───────────────
 
-const PROVIDER_ORDER = ["gemini", "groq", "openrouter"];
-
-const callFns = { gemini: callGemini, groq: callGroq, openrouter: callOpenRouter };
-const streamFns = { gemini: streamGemini, groq: streamGroq, openrouter: streamOpenRouter };
+// Priority: Groq → OpenRouter → Gemini
+const PROVIDER_ORDER = ["groq", "openrouter", "gemini"];
 
 /**
  * Generate text with automatic caching and multi-provider fallback.
- * @param {string} prompt - The full prompt string.
- * @param {object} options
- * @param {boolean} options.cache - Whether to check/store in Redis (default: true).
- * @param {boolean} options.semanticCache - Whether to use semantic/fuzzy matching (default: true).
- * @param {string} options.userQuery - The raw user question (for semantic embedding). If omitted, full prompt is used.
- * @param {number} options.cacheTTL - Cache TTL in seconds (default: 600).
- * @param {string} options.preferProvider - Force a specific provider first ("gemini" | "groq" | "openrouter").
- * @returns {Promise<{text: string, provider: string, cached: boolean}>}
+ * Groq rotates across its model pool before escalating to OpenRouter.
  */
 export async function generateText(prompt, options = {}) {
-  const { cache = true, semanticCache = true, userQuery, cacheTTL = 600, preferProvider } = options;
+  const {
+    cache = true,
+    semanticCache = true,
+    userQuery,
+    cacheTTL = 600,
+    preferProvider,
+  } = options;
 
-  // 1. Check exact Redis cache
+  // 1. Exact Redis cache check
   if (cache) {
     const cacheKey = hashKey("llm", prompt);
-    const cached = await getCache(cacheKey);
+    const cached   = await getCache(cacheKey);
     if (cached) {
       console.log("⚡ Exact cache HIT — returning cached LLM response");
       return { text: cached.text, provider: cached.provider, cached: true };
     }
   }
 
-  // 2. Check semantic/fuzzy cache (embedding-based)
+  // 2. Semantic / fuzzy cache check (embedding-based)
   let queryEmbedding = null;
   if (semanticCache && userQuery) {
     try {
-      queryEmbedding = await generateEmbedding(userQuery);
-      const semanticMatch = await findSemanticMatch(queryEmbedding);
+      queryEmbedding       = await generateEmbedding(userQuery);
+      const semanticMatch  = await findSemanticMatch(queryEmbedding);
       if (semanticMatch) {
         return { text: semanticMatch.text, provider: semanticMatch.provider, cached: true };
       }
@@ -229,43 +334,59 @@ export async function generateText(prompt, options = {}) {
     }
   }
 
-  // 2. Build ordered provider list
+  // 3. Build ordered provider list
   let order = [...PROVIDER_ORDER];
   if (preferProvider && order.includes(preferProvider)) {
     order = [preferProvider, ...order.filter(p => p !== preferProvider)];
   }
 
-  // 3. Try providers in order
+  // 4. Try providers in order; Groq internally rotates models
   let lastError;
   for (const providerKey of order) {
     if (!PROVIDERS[providerKey].enabled) continue;
     if (!isProviderAvailable(providerKey)) {
-      console.log(`⏳ ${PROVIDERS[providerKey].name} — rate limit window full, skipping...`);
+      console.log(`⏳ ${PROVIDERS[providerKey].name} — all rate limits reached, skipping...`);
       continue;
     }
 
     try {
-      console.log(`🤖 Calling ${PROVIDERS[providerKey].name} (${PROVIDERS[providerKey].model})...`);
       recordUsage(providerKey);
-      const text = await callFns[providerKey](prompt);
 
-      // Save to exact cache
+      let text, providerLabel;
+      if (providerKey === "groq") {
+        const result  = await callGroq(prompt);
+        text          = result.text;
+        providerLabel = `Groq (${result.modelUsed})`;
+      } else if (providerKey === "openrouter") {
+        text          = await callOpenRouter(prompt);
+        providerLabel = `OpenRouter (${PROVIDERS.openrouter.model})`;
+      } else {
+        text          = await callGemini(prompt);
+        providerLabel = `Gemini (${PROVIDERS.gemini.model})`;
+      }
+
+      console.log(`✅ Response from ${providerLabel}`);
+
+      // Store in exact cache
       if (cache) {
         const cacheKey = hashKey("llm", prompt);
-        await setCache(cacheKey, { text, provider: PROVIDERS[providerKey].name }, cacheTTL);
+        await setCache(cacheKey, { text, provider: providerLabel }, cacheTTL);
       }
 
-      // Save to semantic cache
+      // Store in semantic cache
       if (semanticCache && queryEmbedding) {
-        await addSemanticEntry(queryEmbedding, text, PROVIDERS[providerKey].name);
+        await addSemanticEntry(queryEmbedding, text, providerLabel);
       }
 
-      return { text, provider: PROVIDERS[providerKey].name, cached: false };
+      return { text, provider: providerLabel, cached: false };
     } catch (err) {
       lastError = err;
       console.warn(`❌ ${PROVIDERS[providerKey].name} failed:`, err.message);
-      // If 429 or rate limit related, set cooldown
-      if (err.message?.includes("429") || err.message?.includes("rate") || err.message?.includes("quota")) {
+      if (
+        err.message?.includes("429") ||
+        err.message?.includes("rate") ||
+        err.message?.includes("quota")
+      ) {
         setCooldown(providerKey, 60_000);
       }
     }
@@ -275,12 +396,8 @@ export async function generateText(prompt, options = {}) {
 }
 
 /**
- * Stream text with multi-provider fallback. Returns an async generator.
- * Does NOT cache (streaming is inherently real-time).
- * @param {string} prompt
- * @param {object} options
- * @param {string} options.preferProvider - Force a specific provider first.
- * @returns {AsyncGenerator<string>} and provider name
+ * Stream text with multi-provider fallback.
+ * Groq internally rotates models. Returns { stream, provider }.
  */
 export async function streamText(prompt, options = {}) {
   const { preferProvider } = options;
@@ -294,19 +411,32 @@ export async function streamText(prompt, options = {}) {
   for (const providerKey of order) {
     if (!PROVIDERS[providerKey].enabled) continue;
     if (!isProviderAvailable(providerKey)) {
-      console.log(`⏳ ${PROVIDERS[providerKey].name} — rate limit window full, skipping...`);
+      console.log(`⏳ ${PROVIDERS[providerKey].name} — all rate limits reached, skipping...`);
       continue;
     }
 
     try {
-      console.log(`🤖 Streaming from ${PROVIDERS[providerKey].name} (${PROVIDERS[providerKey].model})...`);
       recordUsage(providerKey);
-      const stream = streamFns[providerKey](prompt);
-      return { stream, provider: PROVIDERS[providerKey].name };
+
+      if (providerKey === "groq") {
+        const { stream, modelLabel } = await streamGroq(prompt);
+        console.log(`🤖 Streaming from Groq (${modelLabel})...`);
+        return { stream, provider: `Groq (${modelLabel})` };
+      } else if (providerKey === "openrouter") {
+        console.log(`🤖 Streaming from OpenRouter (${PROVIDERS.openrouter.model})...`);
+        return { stream: streamOpenRouter(prompt), provider: `OpenRouter (${PROVIDERS.openrouter.model})` };
+      } else {
+        console.log(`🤖 Streaming from Gemini (${PROVIDERS.gemini.model})...`);
+        return { stream: streamGemini(prompt), provider: `Gemini (${PROVIDERS.gemini.model})` };
+      }
     } catch (err) {
       lastError = err;
       console.warn(`❌ ${PROVIDERS[providerKey].name} stream failed:`, err.message);
-      if (err.message?.includes("429") || err.message?.includes("rate") || err.message?.includes("quota")) {
+      if (
+        err.message?.includes("429") ||
+        err.message?.includes("rate") ||
+        err.message?.includes("quota")
+      ) {
         setCooldown(providerKey, 60_000);
       }
     }
@@ -316,17 +446,40 @@ export async function streamText(prompt, options = {}) {
 }
 
 /**
- * Get the current rate limit status for all providers.
- * Useful for debugging/monitoring.
+ * Returns monitoring status for all providers and Groq model pool.
  */
 export function getGatewayStatus() {
-  return Object.entries(rateLimitState).map(([key, state]) => ({
-    provider: PROVIDERS[key]?.name || key,
-    enabled: PROVIDERS[key]?.enabled || false,
-    model: PROVIDERS[key]?.model,
-    requestsInWindow: state.count,
-    maxRPM: state.maxRPM,
-    onCooldown: Date.now() < state.cooldownUntil,
-    cooldownRemaining: Math.max(0, Math.ceil((state.cooldownUntil - Date.now()) / 1000)),
-  }));
+  const providerStatus = Object.entries(PROVIDERS).map(([key, cfg]) => {
+    if (key === "groq") {
+      const models = GROQ_MODELS.map(m => {
+        const s   = groqModelState[m.id];
+        const now = Date.now();
+        return {
+          model:            m.label,
+          rpmUsed:          s.count,
+          rpmLimit:         m.rpm,
+          rpdUsed:          s.dailyCount,
+          rpdLimit:         m.rpd,
+          available:        isGroqModelAvailable(m.id),
+          onCooldown:       now < s.cooldownUntil,
+          cooldownRemaining: Math.max(0, Math.ceil((s.cooldownUntil - now) / 1000)),
+        };
+      });
+      return { provider: "Groq", enabled: cfg.enabled, models };
+    }
+
+    const state = rateLimitState[key];
+    const now   = Date.now();
+    return {
+      provider:          cfg.name,
+      enabled:           cfg.enabled,
+      model:             cfg.model,
+      requestsInWindow:  state.count,
+      maxRPM:            state.maxRPM,
+      onCooldown:        now < state.cooldownUntil,
+      cooldownRemaining: Math.max(0, Math.ceil((state.cooldownUntil - now) / 1000)),
+    };
+  });
+
+  return providerStatus;
 }
