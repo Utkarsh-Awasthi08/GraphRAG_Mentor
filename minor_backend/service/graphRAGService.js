@@ -5,20 +5,21 @@ import { generateEmbedding, buildSubmissionText, EMBEDDING_DIMENSIONS } from "..
  * Perform vector similarity search over the user's submissions.
  * Returns the top-K most semantically similar submissions.
  */
-export async function vectorSearch(queryEmbedding, userId, topK = 5) {
+export async function vectorSearch(queryEmbedding, userId, topK = 5, minScore = 0.85) {
     const session = driver.session();
 
     try {
         // Use Neo4j's native vector similarity search, scoped to this user
         const result = await session.run(`
-            CALL db.index.vector.queryNodes('submission_embedding', $topK, $queryEmbedding)
+            CALL db.index.vector.queryNodes('submission_embedding', $topK * 2, $queryEmbedding)
             YIELD node AS s, score
             MATCH (u:User {id: $userId})-[:MADE]->(s)
+            WHERE score >= $minScore
             RETURN elementId(s) AS id, s.status AS status, s.timestamp AS timestamp, 
                    s.code AS code, score
             ORDER BY score DESC
             LIMIT $topK
-        `, { queryEmbedding, userId, topK: neo4jInt(topK) });
+        `, { queryEmbedding, userId, topK: neo4jInt(topK), minScore });
 
         return result.records.map(r => ({
             id: r.get("id"),
