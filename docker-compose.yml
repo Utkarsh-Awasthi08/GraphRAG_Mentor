@@ -29,13 +29,13 @@ services:
     image: typesense/typesense:27.1
     container_name: minor_typesense
     environment:
-      - TYPESENSE_API_KEY=minor_project_key
+      - TYPESENSE_API_KEY=trbg8grf8wuf98e4f9ef
       - TYPESENSE_DATA_DIR=/data
     ports:
       - "8109:8108"
     volumes:
       - typesense_data:/data
-    command: '--data-dir /data --api-key=minor_project_key'
+    command: '--data-dir /data --api-key=trbg8grf8wuf98e4f9ef'
     networks:
       - minor_net
 
