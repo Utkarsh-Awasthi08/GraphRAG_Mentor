@@ -178,7 +178,13 @@ export async function streamResponse(question, data, res, mode = "ANALYTICAL", u
         
         for await (const chunkText of stream) {
             fullAnswer += chunkText;
-            res.write(chunkText);
+            
+            // Artificially stream the live chunks to recreate the satisfying typewriter effect
+            const subChunks = chunkText.match(/.{1,15}/gs) || [chunkText];
+            for (const sc of subChunks) {
+                res.write(sc);
+                await new Promise(r => setTimeout(r, 20)); // ~20ms delay per chunk
+            }
         }
         
         try {
