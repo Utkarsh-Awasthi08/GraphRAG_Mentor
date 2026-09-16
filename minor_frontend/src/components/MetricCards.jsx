@@ -5,10 +5,10 @@ function MetricCard({ title, value, icon: Icon, colorClass }) {
   return (
     <div className={cn("glass-panel p-5 flex items-start justify-between border-l-4", colorClass)}>
       <div>
-        <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">{title}</p>
-        <p className="text-2xl font-bold text-white mt-1">{value}</p>
+        <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">{title}</p>
+        <p className="text-2xl font-bold text-slate-900 dark:text-white mt-1">{value}</p>
       </div>
-      <div className={cn("p-2 rounded-lg bg-slate-800/50", colorClass.replace("border-", "text-"))}>
+      <div className={cn("p-2 rounded-lg bg-slate-100 dark:bg-slate-800/50", colorClass.replace("border-", "text-"))}>
         <Icon className="w-5 h-5" />
       </div>
     </div>

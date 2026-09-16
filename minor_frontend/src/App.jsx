@@ -110,7 +110,7 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-900/20 via-slate-950 to-slate-950 pb-20">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-100 via-slate-50 to-slate-50 dark:from-indigo-900/20 dark:via-slate-950 dark:to-slate-950 pb-20 transition-colors duration-300">
       <div className="max-w-[1500px] mx-auto px-4">
         <Navbar />
         
@@ -141,17 +141,17 @@ function App() {
               <div className="animate-in fade-in h-full flex flex-col gap-4">
                 {/* Metric Cards Skeleton */}
                 <div className="grid grid-cols-2 gap-4">
-                  <div className="h-28 bg-slate-800/50 rounded-xl border border-slate-700/50 animate-pulse"></div>
-                  <div className="h-28 bg-slate-800/50 rounded-xl border border-slate-700/50 animate-pulse"></div>
-                  <div className="h-28 bg-slate-800/50 rounded-xl border border-slate-700/50 animate-pulse"></div>
-                  <div className="h-28 bg-slate-800/50 rounded-xl border border-slate-700/50 animate-pulse"></div>
+                  <div className="h-28 bg-white dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700/50 animate-pulse"></div>
+                  <div className="h-28 bg-white dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700/50 animate-pulse"></div>
+                  <div className="h-28 bg-white dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700/50 animate-pulse"></div>
+                  <div className="h-28 bg-white dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700/50 animate-pulse"></div>
                 </div>
                 {/* List Skeleton */}
-                <div className="flex-1 bg-slate-800/50 rounded-xl border border-slate-700/50 animate-pulse p-4 flex flex-col gap-3">
-                  <div className="h-6 bg-slate-700/50 rounded w-1/3 mb-2"></div>
-                  <div className="h-16 bg-slate-700/30 rounded-lg"></div>
-                  <div className="h-16 bg-slate-700/30 rounded-lg"></div>
-                  <div className="h-16 bg-slate-700/30 rounded-lg"></div>
+                <div className="flex-1 bg-white dark:bg-slate-800/50 rounded-xl border border-slate-200 dark:border-slate-700/50 animate-pulse p-4 flex flex-col gap-3">
+                  <div className="h-6 bg-slate-200 dark:bg-slate-700/50 rounded w-1/3 mb-2"></div>
+                  <div className="h-16 bg-slate-100 dark:bg-slate-700/30 rounded-lg"></div>
+                  <div className="h-16 bg-slate-100 dark:bg-slate-700/30 rounded-lg"></div>
+                  <div className="h-16 bg-slate-100 dark:bg-slate-700/30 rounded-lg"></div>
                 </div>
               </div>
             ) : data ? (
@@ -160,7 +160,7 @@ function App() {
                 <SubmissionsList data={data} />
               </div>
             ) : (
-              <div className="h-full flex flex-col items-center justify-center text-slate-500 min-h-[400px] border border-dashed border-slate-800 rounded-xl glass-panel">
+              <div className="h-full flex flex-col items-center justify-center text-slate-500 dark:text-slate-500 min-h-[400px] border border-dashed border-slate-300 dark:border-slate-800 rounded-xl bg-white/50 dark:bg-transparent glass-panel">
                 <p>Dashboard waiting for query...</p>
               </div>
             )}
